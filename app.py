@@ -2,51 +2,46 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# --- 1. CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="AutoTag - Oportunidades de Vehículos", layout="wide", page_icon="🏷️")
+# --- 1. CONFIGURACIÓN Y ESTILO ---
+st.set_page_config(page_title="AutoTag - Buscador Inteligente", layout="wide", page_icon="🏷️")
 
-# --- 2. ESTILO VISUAL AUTOTAG (Naranja y Verde) ---
 st.markdown("""
     <style>
-    .main { background-color: #ffffff; }
-    .stButton>button { 
-        background-color: #FF8C00; color: white; border-radius: 8px; 
-        font-weight: bold; height: 3.5em; width: 100%; border: none;
-    }
-    .stButton>button:hover { background-color: #e67e00; border: none; color: white; }
-    .card-res {
-        padding: 20px; border-radius: 12px; background-color: #f8f9fa;
-        border-left: 8px solid #2E8B57; margin-bottom: 15px;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
-    }
-    .tag-text { color: #FF8C00; font-weight: bold; font-size: 32px; font-family: 'Arial Black'; }
-    .auto-text { color: #2E8B57; font-weight: bold; font-size: 32px; font-family: 'Arial Black'; }
-    .precio-destacado { color: #FF8C00; font-size: 24px; font-weight: bold; }
+    .stButton>button { background-color: #FF8C00; color: white; border-radius: 8px; font-weight: bold; }
+    .card-res { padding: 20px; border-radius: 12px; background-color: #f8f9fa; border-left: 8px solid #2E8B57; margin-bottom: 15px; }
+    .precio-tag { color: #FF8C00; font-size: 22px; font-weight: bold; }
+    .cotizacion-box { background-color: #2E8B57; color: white; padding: 10px; border-radius: 5px; text-align: center; margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. ENCABEZADO ---
-st.markdown('<p><span class="auto-text">Auto</span><span class="tag-text">Tag</span> 🏷️</p>', unsafe_allow_html=True)
-st.write("### Tu etiqueta de confianza para encontrar oportunidades reales.")
+# --- 2. FUNCIÓN PARA TRAER EL DÓLAR (API Libre) ---
+@st.cache_data(ttl=3600) # Guarda el valor por 1 hora para que la página sea rápida
+def obtener_dolar():
+    try:
+        # Usamos la API de DolarApi que es muy confiable en Argentina
+        response = requests.get("https://dolarapi.com/v1/dolares/oficial")
+        data = response.json()
+        return data['venta'] # Traemos el valor de venta del Banco Nación
+    except:
+        return 900.0 # Valor de respaldo por si falla la conexión
 
-# Inicializar sesión para favoritos
-if 'favs' not in st.session_state:
-    st.session_state.favs = []
+val_dolar = obtener_dolar()
 
-# --- 4. PANEL DE BÚSQUEDA ---
-col_busq, col_pres = st.columns([2, 1])
-with col_busq:
-    busqueda = st.text_input("¿Qué buscás hoy?", placeholder="Ej: Toyota Hilux 2017...")
-with col_pres:
-    presupuesto = st.number_input("Presupuesto Máx (USD)", value=15000)
+# --- 3. ENCABEZADO Y COTIZACIÓN ---
+st.markdown(f'<div class="cotizacion-box">🏦 Dólar Banco Nación (Venta): <b>${val_dolar}</b></div>', unsafe_allow_html=True)
+st.title("AutoTag 🏷️")
 
-with st.expander("⚙️ Filtros Personalizados"):
-    f1, f2 = st.columns(2)
-    tipo_v = f1.selectbox("Categoría", ["Auto", "Utilitario / Pyme", "Camión"])
-    ubicacion = f2.text_input("Ubicación preferida", "Argentina")
+# --- 4. PANEL DE CONTROL ---
+col1, col2, col3 = st.columns([2, 1, 1])
+with col1:
+    busqueda = st.text_input("¿Qué buscás?", placeholder="Ej: Hilux 2018...")
+with col2:
+    moneda_mostrar = st.radio("Mostrar precios en:", ["ARS (Pesos)", "USD (Dólares)"])
+with col3:
+    presupuesto = st.number_input("Presupuesto Máx (en la moneda elegida)", value=15000)
 
 # --- 5. LÓGICA DE BÚSQUEDA ---
-def buscar_en_ml(termino):
+def buscar_ml(termino):
     url = f"https://listado.mercadolibre.com.ar/{termino.replace(' ', '-')}"
     headers = {"User-Agent": "Mozilla/5.0"}
     lista = []
@@ -56,51 +51,43 @@ def buscar_en_ml(termino):
         items = soup.find_all('div', class_='poly-card__content', limit=5)
         for i in items:
             t = i.find('h2').text
-            p = i.find('span', class_='andes-money-amount__fraction').text
-            l = i.find('a')['href']
-            lista.append({"t": t, "p": p, "l": l})
+            # El precio en ML a veces viene con símbolos que hay que limpiar
+            p_raw = i.find('span', class_='andes-money-amount__fraction').text.replace('.', '')
+            # ML usa una clase para identificar si es U$S o $
+            simbolo = i.find('span', class_='andes-money-amount__currency-symbol').text
+            
+            p_float = float(p_raw)
+            lista.append({"t": t, "p": p_float, "s": simbolo, "l": i.find('a')['href']})
         return lista
     except: return []
 
-# --- 6. ACCIÓN Y RESULTADOS ---
+# --- 6. RESULTADOS ---
 if st.button("🏷️ ETIQUETAR OPORTUNIDADES"):
-    if busqueda:
-        with st.spinner('AutoTag está escaneando el mercado por vos...'):
-            resultados = buscar_en_ml(busqueda)
-            if resultados:
-                st.session_state.res_busqueda = resultados
-            else:
-                st.error("No encontramos resultados exactos. Intentá variar la búsqueda.")
-    else:
-        st.warning("Por favor, escribí qué vehículo buscás.")
+    res = buscar_ml(busqueda)
+    if res:
+        for r in res:
+            # LÓGICA DE CONVERSIÓN
+            precio_final = r['p']
+            texto_conversion = ""
 
-if 'res_busqueda' in st.session_state:
-    st.write("---")
-    for r in st.session_state.res_busqueda:
-        st.markdown(f"""
-        <div class="card-res">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <span style="font-size: 18px; font-weight: bold; color: #333;">{r['t']}</span><br>
-                    <a href="{r['l']}" target="_blank" style="color: #2E8B57; font-weight: bold; text-decoration: none;">Ver Oferta Original ➔</a>
+            if moneda_mostrar == "ARS (Pesos)":
+                if r['s'] == "U$S": # Si el original es USD, pasamos a Pesos
+                    precio_final = r['p'] * val_dolar
+                    texto_conversion = f"(Original: U$S {r['p']})"
+                simbolo_final = "$"
+            else: # Si el usuario quiere ver Dólares
+                if r['s'] == "$": # Si el original es Pesos, pasamos a Dólares
+                    precio_final = r['p'] / val_dolar
+                    texto_conversion = f"(Original: $ {r['p']})"
+                simbolo_final = "U$S"
+
+            st.markdown(f"""
+            <div class="card-res">
+                <div style="display: flex; justify-content: space-between;">
+                    <b>{r['t']}</b>
+                    <span class="precio-tag">{simbolo_final} {precio_final:,.2f}</span>
                 </div>
-                <span class="precio-destacado">$ {r['p']}</span>
+                <p style="font-size: 0.8em; color: gray;">{texto_conversion}</p>
+                <a href="{r['l']}" target="_blank">Ver publicación ➔</a>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button(f"❤️ Guardar en mi Garaje", key=r['l']):
-            if r not in st.session_state.favs:
-                st.session_state.favs.append(r)
-                st.toast(f"Guardado: {r['t'][:20]}...")
-
-# --- 7. BARRA LATERAL (GARAJE) ---
-st.sidebar.markdown('<p><span class="auto-text" style="font-size:20px">Auto</span><span class="tag-text" style="font-size:20px">Tag</span></p>', unsafe_allow_html=True)
-st.sidebar.header("⭐ Mis Favoritos")
-if st.session_state.favs:
-    for f in st.session_state.favs:
-        st.sidebar.info(f"**{f['t']}**\n$ {f['p']}")
-    if st.sidebar.button("Limpiar todo"):
-        st.session_state.favs = []
-        st.rerun()
-else:
-    st.sidebar.write("Tu garaje está vacío.")
+            """, unsafe_allow_html=True)
