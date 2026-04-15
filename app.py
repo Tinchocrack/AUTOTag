@@ -2,144 +2,103 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import urllib.parse
+import time
 
-# --- 1. CONFIGURACIÓN Y ESTILO AVANZADO ---
-st.set_page_config(page_title="AutoTag - Buscador Pro", layout="wide", page_icon="🏷️")
+# --- CONFIGURACIÓN Y ESTILO ---
+st.set_page_config(page_title="AutoTag Pro", layout="wide", page_icon="🏷️")
 
 st.markdown("""
     <style>
-    /* Estilo general y fuentes */
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Roboto', sans-serif; }
-
-    /* Tarjetas de resultados con efecto Hover */
-    .card-res {
-        padding: 25px;
-        border-radius: 15px;
-        background-color: #ffffff;
-        border-left: 10px solid #2E8B57;
-        margin-bottom: 20px;
-        transition: transform 0.3s, box-shadow 0.3s;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .card-res:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 10px 20px rgba(0,0,0,0.15);
-        border-left-color: #FF8C00;
-    }
-
-    /* Botones personalizados */
-    .btn-ws {
-        background-color: #25D366;
-        color: white !important;
-        padding: 10px 20px;
-        border-radius: 8px;
-        text-decoration: none;
-        font-weight: bold;
-        display: inline-block;
-        margin-top: 10px;
-    }
-    
-    .cotizacion-header {
-        background: linear-gradient(90deg, #2E8B57 0%, #27ae60 100%);
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-        margin-bottom: 30px;
-        font-size: 1.2em;
-    }
-
-    .tag-brand { color: #FF8C00; font-weight: bold; }
-    .auto-brand { color: #2E8B57; font-weight: bold; }
+    .card-res { padding: 20px; border-radius: 15px; background-color: white; border-left: 10px solid #2E8B57; 
+                margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: 0.3s; }
+    .card-res:hover { transform: scale(1.01); border-left-color: #FF8C00; }
+    .btn-ws { background-color: #25D366; color: white !important; padding: 8px 15px; border-radius: 8px; 
+              text-decoration: none; font-weight: bold; display: inline-block; margin-top: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. MOTOR DE COTIZACIÓN ---
+# --- DOLAR ---
 @st.cache_data(ttl=3600)
 def obtener_dolar():
     try:
         r = requests.get("https://dolarapi.com/v1/dolares/oficial")
         return r.json()['venta']
-    except: return 950.0
+    except: return 980.0
 
 val_dolar = obtener_dolar()
 
-# --- 3. INTERFAZ DE USUARIO ---
-st.markdown(f'<div class="cotizacion-header">🏦 Dólar BNA Hoy: <b>${val_dolar}</b> | <span style="font-size:0.8em">Actualizado automáticamente</span></div>', unsafe_allow_html=True)
-
-col_logo, col_desc = st.columns([1, 4])
-with col_logo:
-    st.markdown('# <span class="auto-brand">Auto</span><span class="tag-brand">Tag</span>', unsafe_allow_html=True)
-
-with st.container():
-    c1, c2, c3 = st.columns([2, 1, 1])
-    with c1:
-        busqueda = st.text_input("🔍 ¿Qué buscamos hoy?", placeholder="Ej: Hilux, Kangoo, Vento...")
-    with c2:
-        moneda = st.selectbox("Moneda", ["Dólares (USD)", "Pesos (ARS)"])
-    with c3:
-        st.write("") # Espaciador
-        btn_buscar = st.button("🏷️ ESCANEAR")
-
-# --- 4. LÓGICA DE BÚSQUEDA Y SCRAPING ---
+# --- MOTOR DE BÚSQUEDA REFORZADO ---
 def buscar_oportunidades(query):
-    url = f"https://listado.mercadolibre.com.ar/{query.replace(' ', '-')}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # Limpiamos el texto para la URL
+    query_clean = urllib.parse.quote(query)
+    url = f"https://listado.mercadolibre.com.ar/{query_clean}"
+    
+    # Engañamos a ML para que crea que somos Chrome
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Accept-Language": "es-AR,es;q=0.9"
+    }
+    
     lista = []
     try:
-        r = requests.get(url, headers=headers)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        # Buscamos los contenedores de productos
-        items = soup.find_all('div', class_='poly-card__content', limit=6)
-        for i in items:
-            titulo = i.find('h2').text
-            precio_texto = i.find('span', class_='andes-money-amount__fraction').text.replace('.', '')
-            moneda_orig = i.find('span', class_='andes-money-amount__currency-symbol').text
-            link = i.find('a')['href']
-            lista.append({"t": titulo, "p": float(precio_texto), "m": moneda_orig, "l": link})
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # ML usa diferentes clases. Probamos con las más comunes:
+        items = soup.find_all(['div', 'li'], class_=['ui-search-result__wrapper', 'poly-card', 'ui-search-layout__item'])
+        
+        for i in items[:10]: # Traemos los primeros 10
+            try:
+                # Intentamos extraer Título
+                titulo = i.find(['h2', 'h3']).text.strip()
+                # Intentamos extraer Precio
+                precio_raw = i.find('span', class_='andes-money-amount__fraction').text.replace('.', '').replace(',', '')
+                # Intentamos extraer Moneda
+                moneda_orig = "U$S" if "U$S" in i.text or "USD" in i.text else "$"
+                # Intentamos extraer Link
+                link = i.find('a')['href']
+                
+                lista.append({"t": titulo, "p": float(precio_raw), "m": moneda_orig, "l": link})
+            except:
+                continue
         return lista
-    except: return []
+    except Exception as e:
+        st.error(f"Error de conexión: {e}")
+        return []
 
-# --- 5. MOSTRAR RESULTADOS ---
-if btn_buscar and busqueda:
-    resultados = buscar_oportunidades(busqueda)
-    if resultados:
-        st.write(f"### 🏷️ Oportunidades encontradas para '{busqueda}':")
-        for r in resultados:
-            # Conversión dinámica
-            p_final = r['p']
-            if "Dólares" in moneda and r['m'] == "$":
-                p_final = r['p'] / val_dolar
-                txt_orig = f"Original: ${r['p']:,.0f} ARS"
-            elif "Pesos" in moneda and r['m'] == "U$S":
-                p_final = r['p'] * val_dolar
-                txt_orig = f"Original: U$S {r['p']:,.0f}"
+# --- INTERFAZ ---
+st.title("AutoTag 🏷️")
+st.info(f"💡 Cotización Dólar BNA: ${val_dolar}")
+
+c1, c2 = st.columns([3, 1])
+with c1:
+    busqueda = st.text_input("¿Qué auto o camioneta buscás?", placeholder="Ej: Hilux 2015")
+with c2:
+    moneda_v = st.selectbox("Ver precios en:", ["Pesos (ARS)", "Dólares (USD)"])
+
+if st.button("🔍 BUSCAR AHORA"):
+    if busqueda:
+        with st.spinner('Escaneando Mercado Libre...'):
+            resultados = buscar_oportunidades(busqueda)
+            if resultados:
+                for r in resultados:
+                    # Lógica de conversión
+                    p_final = r['p']
+                    if "Dólares" in moneda_v and r['m'] == "$":
+                        p_final = r['p'] / val_dolar
+                    elif "Pesos" in moneda_v and r['m'] == "U$S":
+                        p_final = r['p'] * val_dolar
+                    
+                    simb = "U$S" if "Dólares" in moneda_v else "$"
+                    
+                    st.markdown(f"""
+                    <div class="card-res">
+                        <h4>{r['t']}</h4>
+                        <h3 style="color:#FF8C00;">{simb} {p_final:,.0f}</h3>
+                        <p style="font-size:0.8em; color:gray;">Moneda original: {r['m']}</p>
+                        <a href="{r['l']}" target="_blank">Ver en ML ➔</a> | 
+                        <a href="https://wa.me/?text=Mira este auto: {r['l']}" class="btn-ws">Compartir</a>
+                    </div>
+                    """, unsafe_allow_html=True)
             else:
-                txt_orig = "Precio directo"
-
-            simbolo = "U$S" if "Dólares" in moneda else "$"
-            
-            # Mensaje de WhatsApp pre-armado
-            msg_wa = urllib.parse.quote(f"Hola! Vi esta oportunidad en AutoTag y quería consultarte: {r['t']} - {r['l']}")
-            
-            # HTML de la Tarjeta Pro
-            st.markdown(f"""
-            <div class="card-res">
-                <div style="display: flex; justify-content: space-between; align-items: start;">
-                    <div>
-                        <h4 style="margin:0; color:#333;">{r['t']}</h4>
-                        <p style="color:gray; font-size:0.9em; margin:5px 0;">{txt_orig}</p>
-                    </div>
-                    <div style="text-align: right;">
-                        <span style="font-size: 1.5em; font-weight: bold; color: #FF8C00;">{simbolo} {p_final:,.0f}</span>
-                    </div>
-                </div>
-                <div style="margin-top:15px;">
-                    <a href="{r['l']}" target="_blank" style="color:#2E8B57; font-weight:bold; text-decoration:none; margin-right:20px;">VER EN ORIGEN ➔</a>
-                    <a href="https://wa.me/?text={msg_wa}" target="_blank" class="btn-ws">📲 COMPARTIR / CONSULTAR</a>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.warning("No encontramos resultados. Probá con palabras más simples.")
+                st.warning("No hubo suerte. Intentá ser más específico (Ej: 'Ford Ranger 2012')")
