@@ -1,91 +1,132 @@
 import streamlit as st
 import requests
+from bs4 import BeautifulSoup
+import urllib.parse
 
-# --- 1. CONFIGURACIÓN ---
-st.set_page_config(page_title="AutoTag Pro", layout="wide", page_icon="🏷️")
+# --- 1. CONFIGURACIÓN Y ESTILO ---
+st.set_page_config(page_title="AutoTag - Centro de Vehículos", layout="wide", page_icon="🏷️")
 
-# --- 2. ESTILO ---
 st.markdown("""
     <style>
-    .card-res { background: white; padding: 15px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #ddd; }
-    .price { color: #FF8C00; font-size: 24px; font-weight: bold; }
-    .btn-link { background: #2E8B57; color: white !important; padding: 8px; border-radius: 5px; text-decoration: none; display: block; text-align: center; }
+    .main { background-color: #f0f2f6; }
+    .card-auto {
+        background: white;
+        border-radius: 15px;
+        padding: 0px;
+        margin-bottom: 25px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+    .info-area { padding: 15px; }
+    .price-ars { color: #2E8B57; font-size: 22px; font-weight: bold; }
+    .price-usd { color: #FF8C00; font-size: 22px; font-weight: bold; }
+    .btn-detalle {
+        background-color: #FF8C00;
+        color: white !important;
+        text-align: center;
+        padding: 10px;
+        display: block;
+        border-radius: 0 0 15px 15px;
+        text-decoration: none;
+        font-weight: bold;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DOLAR ---
+# --- 2. OBTENER DÓLAR ---
 @st.cache_data(ttl=3600)
 def obtener_dolar():
     try:
-        r = requests.get("https://dolarapi.com/v1/dolares/oficial", timeout=5)
+        # Usamos una fuente alternativa por si una falla
+        r = requests.get("https://dolarapi.com/v1/dolares/blue", timeout=5)
         return r.json()['venta']
-    except: return 1000.0
+    except: return 1050.0
 
 val_dolar = obtener_dolar()
 
-# --- 4. MOTOR DE BÚSQUEDA (MODO SURVIVOR) ---
-def buscar_ml_v3(query):
-    # Cambiamos la URL a una que ML suele dejar pasar más fácil
-    query_clean = query.replace(" ", "%20")
-    # Agregamos parámetros que simulan una búsqueda real de usuario
-    url = f"https://api.mercadolibre.com/sites/MLA/search?q={query_clean}&sort=relevance&limit=12"
+# --- 3. MOTOR DE BÚSQUEDA "REPOSTEADOR" ---
+def scrapear_vehiculos(query):
+    query_url = query.replace(" ", "-")
+    url = f"https://vehiculos.mercadolibre.com.ar/{query_url}_NoIndex_True"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "es-AR,es;q=0.9"
     }
     
+    lista = []
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('results', [])
-        else:
-            return []
-    except:
-        return []
+        response = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Buscamos los bloques de cada auto
+        articulos = soup.find_all('li', class_='ui-search-layout__item', limit=12)
+        
+        for art in articulos:
+            try:
+                titulo = art.find('h2').text
+                link = art.find('a')['href']
+                
+                # Precio y Moneda
+                precio_full = art.find('span', class_='andes-money-amount__fraction').text.replace('.', '')
+                simbolo = art.find('span', class_='andes-money-amount__currency-symbol').text
+                
+                # Imagen (Buscamos la que no es lazy-load)
+                img_tag = art.find('img')
+                img_url = img_tag.get('data-src') or img_tag.get('src')
 
-# --- 5. INTERFAZ ---
-st.title("AutoTag 🏷️")
-st.write(f"💵 Dólar Oficial: **${val_dolar}**")
+                lista.append({
+                    "t": titulo,
+                    "p": float(precio_full),
+                    "s": "USD" if "U$S" in simbolo else "ARS",
+                    "l": link,
+                    "img": img_url
+                })
+            except: continue
+        return lista
+    except: return []
 
-busqueda = st.text_input("Ingresá marca y modelo:", placeholder="Ej: Toyota Hilux")
-moneda_v = st.selectbox("Convertir a:", ["Pesos (ARS)", "Dólares (USD)"])
+# --- 4. INTERFAZ ---
+st.markdown('# <span style="color:#2E8B57">Auto</span><span style="color:#FF8C00">Tag</span> 🏷️', unsafe_allow_html=True)
+st.write(f"📊 **Dólar de Referencia: ${val_dolar}**")
+
+with st.container():
+    c1, c2 = st.columns([3,1])
+    with c1:
+        busqueda = st.text_input("Buscador de Vehículos:", placeholder="Ej: VW Amarok V6")
+    with c2:
+        preferencia = st.selectbox("Ver precios en:", ["Dólares (USD)", "Pesos (ARS)"])
 
 if busqueda:
-    with st.spinner('Escaneando...'):
-        res = buscar_ml_v3(busqueda)
-        if res:
+    with st.spinner(f'Analizando disponibilidad de {busqueda}...'):
+        autos = scrapear_vehiculos(busqueda)
+        
+        if autos:
             cols = st.columns(3)
-            for idx, i in enumerate(res):
-                # Datos básicos
-                titulo = i.get('title')
-                precio_orig = float(i.get('price'))
-                moneda_orig = i.get('currency_id')
-                link = i.get('permalink')
-                img = i.get('thumbnail').replace("-I.jpg", "-O.jpg") # Intenta mejorar calidad
-
-                # Conversión
-                p_final = precio_orig
-                if "USD" in moneda_v and moneda_orig == "ARS":
-                    p_final = precio_orig / val_dolar
-                elif "ARS" in moneda_v and moneda_orig == "USD":
-                    p_final = precio_orig * val_dolar
+            for idx, a in enumerate(autos):
+                # Conversión de moneda
+                p_display = a['p']
+                if preferencia == "Dólares (USD)" and a['s'] == "ARS":
+                    p_display = a['p'] / val_dolar
+                elif preferencia == "Pesos (ARS)" and a['s'] == "USD":
+                    p_display = a['p'] * val_dolar
                 
-                simb = "U$S" if "USD" in moneda_v else "$"
+                simb = "U$S" if "Dólares" in preferencia else "$"
+                clase_precio = "price-usd" if "Dólares" in preferencia else "price-ars"
 
                 with cols[idx % 3]:
                     st.markdown(f"""
-                    <div class="card-res">
-                        <img src="{img}" style="width:100%; height:150px; object-fit:cover; border-radius:8px;">
-                        <h4 style="height:45px; overflow:hidden; font-size:14px;">{titulo}</h4>
-                        <p class="price">{simb} {p_final:,.0f}</p>
-                        <p style="font-size:10px; color:gray;">Original: {moneda_orig} {precio_orig:,.0f}</p>
-                        <a href="{link}" target="_blank" class="btn-link">Ver Vehículo</a>
+                    <div class="card-auto">
+                        <img src="{a['img']}" style="width:100%; height:180px; object-fit:cover;">
+                        <div class="info-area">
+                            <h5 style="height:40px; overflow:hidden; margin:0; font-size:14px;">{a['t']}</h5>
+                            <p class="{clase_precio}">{simb} {p_display:,.0f}</p>
+                            <p style="font-size:11px; color:gray; margin:0;">Publicado en: {a['s']}</p>
+                        </div>
+                        <a href="{a['l']}" target="_blank" class="btn-detalle">VER FICHA COMPLETA</a>
                     </div>
                     """, unsafe_allow_html=True)
         else:
-            # SI FALLA TODO, MOSTRAMOS UN BOTÓN DIRECTO
-            st.error("⚠️ Mercado Libre bloqueó la conexión automática.")
-            st.info("No te preocupes, podés ver los resultados haciendo clic acá abajo:")
-            url_manual = f"https://listado.mercadolibre.com.ar/{busqueda.replace(' ', '-')}"
-            st.markdown(f'<a href="{url_manual}" target="_blank" style="background:#FF8C00; color:white; padding:15px; display:block; text-align:center; border-radius:10px; text-decoration:none; font-weight:bold;">🔍 ABRIR BÚSQUEDA EN MERCADO LIBRE</a>', unsafe_allow_html=True)
+            st.error("⚠️ No pudimos 'repostear' los resultados. Mercado Libre está protegiendo los datos.")
+            st.info("Intentá buscar algo muy específico (Marca y Modelo).")
