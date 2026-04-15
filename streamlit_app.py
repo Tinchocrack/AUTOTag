@@ -1,66 +1,75 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+import time
 
 # 1. CONFIGURACIÓN
-st.set_page_config(page_title="AutoTag Pro", layout="wide")
+st.set_page_config(page_title="AutoTag Pro", layout="wide", page_icon="🏷️")
 
-# Tu clave que ya sabemos que funciona
+# Tu API Key (Sigue siendo la misma)
 ANT_API_KEY = "0e0c3aa3df7044d6be3ab22c99fcddc7"
 
-st.markdown("# AutoTag 🏷️")
+st.markdown("# AutoTag 🏎️")
 
-# 2. DOLAR (Directo para evitar esperas)
+# 2. DOLAR
 @st.cache_data(ttl=3600)
 def traer_dolar():
     try:
         return requests.get("https://dolarapi.com/v1/dolares/oficial").json()['venta']
-    except: return 1385.0
+    except: return 1410.0
 
-val_dolar = traer_dolar()
-st.write(f"Dólar: ${val_dolar}")
+dolar_val = traer_dolar()
+st.write(f"💵 Dólar BNA: **${dolar_val}**")
 
 # 3. BUSCADOR
-query = st.text_input("Buscá un auto (ej: Kangoo, Hilux):")
+query = st.text_input("Buscá un vehículo:", placeholder="Ej: Hilux 2016, Vento TSI...")
 
 if query:
-    # Mostramos un mensaje de progreso más copado
-    progreso = st.status("Conectando con el servidor seguro...", expanded=True)
+    status = st.status("Iniciando motor de búsqueda...", expanded=True)
     
-    # Preparamos la URL de ML
-    url_ml = f"https://vehiculos.mercadolibre.com.ar/{query.replace(' ', '-')}"
+    # Formateamos la URL de ML
+    url_target = f"https://vehiculos.mercadolibre.com.ar/{query.replace(' ', '-')}"
     
-    # Llamada a ScrapingAnt REFORZADA
-    # Agregamos 'wait_for_selector' para esperar a que carguen las fotos
-    api_url = f"https://api.scrapingant.com/v2/general?url={url_ml}&x-api-key={ANT_API_KEY}&proxy_type=residential&browser=false"
+    # 💡 CAMBIO CLAVE: Activamos 'browser=true' para que cargue el contenido dinámico
+    api_url = f"https://api.scrapingant.com/v2/general?url={url_target}&x-api-key={ANT_API_KEY}&proxy_type=residential&browser=true"
 
     try:
-        r = requests.get(api_url, timeout=30)
-        progreso.update(label="Analizando datos de mercado...", state="running")
+        status.write("Saltando bloqueos de seguridad...")
+        r = requests.get(api_url, timeout=45)
         
-        soup = BeautifulSoup(r.text, 'html.parser')
-        # Buscamos las tarjetas de los autos
-        items = soup.find_all('li', class_='ui-search-layout__item', limit=9)
-        
-        if not items:
-            st.error("ML devolvió la página vacía. Intentá buscar de nuevo en 5 segundos.")
+        if r.status_code == 200:
+            status.write("Procesando datos recibidos...")
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            # Buscamos las tarjetas (ML cambia las clases seguido, usamos un selector más amplio)
+            items = soup.select('li.ui-search-layout__item')
+            
+            if not items:
+                st.warning("Mercado Libre no devolvió resultados legibles. Intentá con una marca más conocida.")
+            else:
+                status.update(label="¡Resultados listos!", state="complete", expanded=False)
+                
+                cols = st.columns(3)
+                for idx, item in enumerate(items[:12]): # Limitamos a 12 para que cargue rápido
+                    try:
+                        titulo = item.find('h2').text
+                        # Buscamos el precio con un selector flexible
+                        precio = item.find('span', class_='andes-money-amount__fraction').text
+                        link = item.find('a')['href']
+                        
+                        # Manejo de imágenes (ML usa src o data-src)
+                        img_tag = item.find('img')
+                        img_url = img_tag.get('data-src') or img_tag.get('src') or ""
+
+                        with cols[idx % 3]:
+                            st.image(img_url, use_container_width=True)
+                            st.subheader(f"$ {precio}")
+                            st.caption(titulo)
+                            st.link_button("Ver Vehículo", link)
+                            st.write("---")
+                    except: continue
         else:
-            progreso.update(label="¡Resultados encontrados!", state="complete", expanded=False)
-            cols = st.columns(3)
-            for idx, item in enumerate(items):
-                try:
-                    # Extraemos la info básica
-                    titulo = item.find('h2').text
-                    precio = item.find('span', class_='andes-money-amount__fraction').text
-                    link = item.find('a')['href']
-                    img_tag = item.find('img')
-                    img_url = img_tag.get('data-src') or img_tag.get('src')
-                    
-                    with cols[idx % 3]:
-                        st.image(img_url, use_container_width=True)
-                        st.subheader(f"$ {precio}")
-                        st.caption(titulo)
-                        st.link_button("Ver Vehículo", link)
-                except: continue
+            st.error(f"Error de ScrapingAnt: {r.status_code}")
+            
     except Exception as e:
         st.error(f"Error de conexión: {e}")
